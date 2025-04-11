@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Clasificación de Números - Red Neuronal</title>
+  <link rel="stylesheet" href="vista.css">
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0"></script>
+</head>
+<body>
+  
+  <canvas id="canvas" width="280" height="280"></canvas><br>
+  <div class="botones">
+  <button onclick="predecir()">Predecir</button>
+  <button onclick="limpiarCanvas()">Borrar</button>
+  </div>
+  <p id="resultado">Resultado: </p>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 20;
+    let pintando = false;
+
+    canvas.addEventListener('mousedown', () => pintando = true);
+    canvas.addEventListener('mouseup', () => pintando = false);
+    canvas.addEventListener('mousemove', dibujar);
+
+    function dibujar(e) {
+      if (!pintando) return;
+      ctx.lineTo(e.offsetX, e.offsetY);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(e.offsetX, e.offsetY);
+    }
+
+    function limpiarCanvas() {
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.beginPath();
+      document.getElementById('resultado').innerText = 'Resultado: ';
+    }
+
+    // Red neuronal simple
+    const modelo = tf.sequential();
+    modelo.add(tf.layers.flatten({inputShape: [28, 28]}));
+    modelo.add(tf.layers.dense({units: 128, activation: 'relu'}));
+    modelo.add(tf.layers.dense({units: 128, activation: 'relu'}));
+    modelo.add(tf.layers.dense({units: 128, activation: 'relu'}));
+    modelo.add(tf.layers.dense({units: 10, activation: 'softmax'}));
+
+    modelo.compile({
+      optimizer: 'adam',
+      loss: 'sparseCategoricalCrossentropy',
+      metrics: ['accuracy']
+    });
+
+    // Cargar y normalizar el dataset MNIST
+    let datos_entrenamiento;
+    async function cargarDatos() {
+      const mnist = await tf.data.mnist();
+      const datos = mnist.train;
+      datos_entrenamiento = datos.map(({xs, ys}) => {
+        return {xs: xs.div(255), ys};
+      }).batch(32);
+    }
+
+    async function entrenarModelo() {
+      await cargarDatos();
+      await modelo.fitDataset(datos_entrenamiento, {
+        epochs: 20,
+        callbacks: {
+          onEpochEnd: (epoch, logs) => console.log(`Epoch ${epoch}: loss=${logs.loss}`)
+        }
+      });
+      console.log("Modelo entrenado");
+    }
+
+    function obtenerImagenCentrada() {
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const pixels = imageData.data;
+      let [minX, minY, maxX, maxY] = [280, 280, 0, 0];
+
+      for (let y = 0; y < 280; y++) {
+        for (let x = 0; x < 280; x++) {
+          const index = (y * 280 + x) * 4;
+          if (pixels[index] > 0 || pixels[index + 1] > 0 || pixels[index + 2] > 0) {
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+          }
+        }
+      }
+
+      if (maxX < minX || maxY < minY) return null; // no se dibujó nada
+
+      const ancho = maxX - minX;
+      const alto = maxY - minY;
+      const lado = Math.max(ancho, alto);
+      const offscreenCanvas = document.createElement('canvas');
+      offscreenCanvas.width = lado;
+      offscreenCanvas.height = lado;
+      const offCtx = offscreenCanvas.getContext('2d');
+      offCtx.fillStyle = 'black';
+      offCtx.fillRect(0, 0, lado, lado);
+      offCtx.drawImage(canvas, minX, minY, ancho, alto, 0, 0, lado, lado);
+
+      return offscreenCanvas;
+    }
+
+    async function predecir() {
+      const imagenCentrada = obtenerImagenCentrada();
+      if (!imagenCentrada) {
+        document.getElementById('resultado').innerText = 'Dibuja un número antes de predecir';
+        return;
+      }
+
+      const imgData = imagenCentrada.getContext('2d').getImageData(0, 0, imagenCentrada.width, imagenCentrada.height);
+      const input = tf.tidy(() => {
+        const img = tf.browser.fromPixels(imgData, 1).mean(2).toFloat();
+        const resized = tf.image.resizeBilinear(img.expandDims(-1), [28, 28]);
+        const normalizado = resized.div(255).reshape([1, 28, 28]);
+        return normalizado;
+      });
+      const prediccion = modelo.predict(input);
+      const clase = (await prediccion.argMax(1).data())[0];
+      document.getElementById('resultado').innerText = `Resultado: ${clase}`;
+    }
+
+    entrenarModelo();
+  </script>
+</body>
+</html>
